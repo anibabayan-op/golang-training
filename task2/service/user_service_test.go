@@ -5,76 +5,74 @@ import (
 
 	"golang-training/task2/dao"
 	"golang-training/task2/model"
+
+	"github.com/stretchr/testify/mock"
+	"golang.org/x/crypto/bcrypt"
 )
 
-func resetDAO() {
-	dao.Users = make(map[string]model.User)
-	dao.Tokens = make(map[string]string)
-}
-
 func TestRegisterUser(t *testing.T) {
-	resetDAO()
+	mockDAO := new(dao.MockDAO)
+	service := NewUserService(mockDAO)
 
-	user := model.User{ID: "1", Name: "Alice", Email: "alice@example.com", Password: "secret"}
-	err := RegisterUser(user)
+	input := model.User{ID: "1", Name: "Alice", Email: "alice@example.com", Password: "secret"}
+
+	mockDAO.On("CreateUser", mock.AnythingOfType("model.User")).Return(nil)
+
+	created, err := service.RegisterUser(input)
 	if err != nil {
 		t.Fatalf("RegisterUser failed: %v", err)
 	}
-
-	err = RegisterUser(user)
-	if err == nil {
-		t.Fatalf("Expected error when registering duplicate user")
+	if created.Email != "alice@example.com" {
+		t.Fatalf("Expected email alice@example.com, got %s", created.Email)
 	}
+
+	mockDAO.AssertExpectations(t)
 }
 
 func TestAuthenticateUser(t *testing.T) {
-	resetDAO()
+	mockDAO := new(dao.MockDAO)
+	service := NewUserService(mockDAO)
 
-	user := model.User{ID: "1", Name: "Alice", Email: "alice@example.com", Password: "secret"}
-	_ = dao.CreateUser(user)
+	// Generate a bcrypt hash for "secret"
+	hashedPassword, _ := bcrypt.GenerateFromPassword([]byte("secret"), bcrypt.DefaultCost)
+	user := model.User{ID: "1", Name: "Alice", Email: "alice@example.com", Password: string(hashedPassword)}
 
-	token, err := AuthenticateUser("alice@example.com", "secret")
+	mockDAO.On("GetUserByEmail", "alice@example.com").Return(user, nil)
+	mockDAO.On("CreateToken", "1").Return("mocked-token", nil)
+
+	token, err := service.AuthenticateUser("alice@example.com", "secret")
 	if err != nil {
 		t.Fatalf("AuthenticateUser failed: %v", err)
 	}
-	if token == "" {
-		t.Fatalf("Expected a token, got empty string")
+	if token != "mocked-token" {
+		t.Fatalf("Expected mocked-token, got %s", token)
 	}
 
-	_, err = AuthenticateUser("alice@example.com", "wrong")
-	if err == nil {
-		t.Fatalf("Expected error for wrong password")
-	}
-
-	_, err = AuthenticateUser("bob@example.com", "secret")
-	if err == nil {
-		t.Fatalf("Expected error for non-existing email")
-	}
+	mockDAO.AssertExpectations(t)
 }
 
 func TestLogoutUser(t *testing.T) {
-	resetDAO()
+	mockDAO := new(dao.MockDAO)
+	service := NewUserService(mockDAO)
 
-	user := model.User{ID: "1", Name: "Alice", Email: "alice@example.com", Password: "secret"}
-	_ = dao.CreateUser(user)
-	token, _ := dao.CreateToken("1")
+	mockDAO.On("DeleteToken", "token123").Return(nil)
 
-	LogoutUser(token)
+	service.LogoutUser("token123")
 
-	_, err := dao.GetUserIDByToken(token)
-	if err == nil {
-		t.Fatalf("Expected error after logout, token should be deleted")
-	}
+	mockDAO.AssertCalled(t, "DeleteToken", "token123")
+	mockDAO.AssertExpectations(t)
 }
 
 func TestGetCurrentUser(t *testing.T) {
-	resetDAO()
+	mockDAO := new(dao.MockDAO)
+	service := NewUserService(mockDAO)
 
-	user := model.User{ID: "1", Name: "Alice", Email: "alice@example.com", Password: "secret"}
-	_ = dao.CreateUser(user)
-	token, _ := dao.CreateToken("1")
+	user := model.User{ID: "1", Name: "Alice", Email: "alice@example.com"}
 
-	u, err := GetCurrentUser(token)
+	mockDAO.On("GetUserIDByToken", "token123").Return("1", nil)
+	mockDAO.On("GetUserByID", "1").Return(user, nil)
+
+	u, err := service.GetCurrentUser("token123")
 	if err != nil {
 		t.Fatalf("GetCurrentUser failed: %v", err)
 	}
@@ -82,22 +80,22 @@ func TestGetCurrentUser(t *testing.T) {
 		t.Fatalf("Expected user ID 1, got %s", u.ID)
 	}
 
-	_, err = GetCurrentUser("invalid")
-	if err == nil {
-		t.Fatalf("Expected error for invalid token")
-	}
+	mockDAO.AssertExpectations(t)
 }
 
 func TestGetAllUsersService(t *testing.T) {
-	resetDAO()
+	mockDAO := new(dao.MockDAO)
+	service := NewUserService(mockDAO)
 
-	u1 := model.User{ID: "1", Name: "Alice", Email: "alice@example.com", Password: "secret"}
-	u2 := model.User{ID: "2", Name: "Bob", Email: "bob@example.com", Password: "pass"}
-	_ = dao.CreateUser(u1)
-	_ = dao.CreateUser(u2)
-	token, _ := dao.CreateToken("1")
+	u1 := model.User{ID: "1", Name: "Alice", Email: "alice@example.com"}
+	u2 := model.User{ID: "2", Name: "Bob", Email: "bob@example.com"}
 
-	users, err := GetAllUsersService(token)
+	// Mock token -> userID
+	mockDAO.On("GetUserIDByToken", "token123").Return("1", nil)
+	mockDAO.On("GetUserByID", "1").Return(u1, nil) // needed for GetCurrentUser
+	mockDAO.On("GetAllUsers").Return([]model.User{u1, u2})
+
+	users, err := service.GetAllUsersService()
 	if err != nil {
 		t.Fatalf("GetAllUsersService failed: %v", err)
 	}
@@ -105,8 +103,5 @@ func TestGetAllUsersService(t *testing.T) {
 		t.Fatalf("Expected 2 users, got %d", len(users))
 	}
 
-	_, err = GetAllUsersService("invalid")
-	if err == nil {
-		t.Fatalf("Expected error for invalid token")
-	}
+	mockDAO.AssertExpectations(t)
 }

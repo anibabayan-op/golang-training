@@ -1,15 +1,22 @@
 package dao
 
 import (
+	"context"
 	"testing"
+	"time"
 
 	"golang-training/task2/model"
 
-	"github.com/golang-jwt/jwt/v5"
+	"go.mongodb.org/mongo-driver/bson"
 )
 
+func clearCollections() {
+	_, _ = userCol.DeleteMany(context.Background(), bson.M{})
+	_, _ = tokenCol.DeleteMany(context.Background(), bson.M{})
+}
+
 func TestCreateAndGetUser(t *testing.T) {
-	Users = make(map[string]model.User)
+	clearCollections()
 
 	user := model.User{
 		ID:       "1",
@@ -23,6 +30,7 @@ func TestCreateAndGetUser(t *testing.T) {
 		t.Fatalf("CreateUser failed: %v", err)
 	}
 
+	// Duplicate should fail
 	err = CreateUser(user)
 	if err == nil {
 		t.Fatalf("Expected error when creating duplicate user")
@@ -51,7 +59,7 @@ func TestCreateAndGetUser(t *testing.T) {
 }
 
 func TestGetAllUsers(t *testing.T) {
-	Users = make(map[string]model.User)
+	clearCollections()
 
 	u1 := model.User{ID: "1", Name: "Alice", Email: "a@example.com", Password: "p"}
 	u2 := model.User{ID: "2", Name: "Bob", Email: "b@example.com", Password: "p"}
@@ -65,7 +73,7 @@ func TestGetAllUsers(t *testing.T) {
 }
 
 func TestTokenOperations(t *testing.T) {
-	Tokens = make(map[string]string)
+	clearCollections()
 
 	userID := "1"
 
@@ -82,7 +90,11 @@ func TestTokenOperations(t *testing.T) {
 		t.Fatalf("Expected userID %s, got %s", userID, uid)
 	}
 
-	DeleteToken(token)
+	err = DeleteToken(token)
+	if err != nil {
+		t.Fatalf("DeleteToken failed: %v", err)
+	}
+
 	_, err = GetUserIDByToken(token)
 	if err == nil {
 		t.Fatalf("Expected error after deleting token")
@@ -90,31 +102,24 @@ func TestTokenOperations(t *testing.T) {
 }
 
 func TestTokenExpirationSimulation(t *testing.T) {
-	Tokens = make(map[string]string)
+	clearCollections()
 
 	userID := "2"
-	token, err := generateToken(userID)
+	exp := time.Now().Add(-1 * time.Minute).Unix() // expired token
+
+	// Create expired token in DB
+	expiredToken := model.Token{
+		Token:  "expiredtoken123",
+		UserID: userID,
+		Exp:    exp,
+	}
+	_, err := tokenCol.InsertOne(context.Background(), expiredToken)
 	if err != nil {
-		t.Fatalf("generateToken failed: %v", err)
+		t.Fatalf("Failed to insert expired token: %v", err)
 	}
 
-	Tokens[token] = userID
-
-	uid, err := GetUserIDByToken(token)
-	if err != nil {
-		t.Fatalf("Expected token to exist, got error: %v", err)
-	}
-	if uid != userID {
-		t.Fatalf("Expected userID %s, got %s", userID, uid)
-	}
-
-	parsed, err := jwt.Parse(token, func(token *jwt.Token) (interface{}, error) {
-		return jwtSecret, nil
-	})
-	if err != nil {
-		t.Fatalf("Failed to parse JWT: %v", err)
-	}
-	if !parsed.Valid {
-		t.Fatalf("Token should be valid immediately after creation")
+	_, err = GetUserIDByToken("expiredtoken123")
+	if err == nil {
+		t.Fatalf("Expected error for expired token")
 	}
 }
